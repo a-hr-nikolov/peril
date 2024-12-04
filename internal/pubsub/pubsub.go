@@ -34,3 +34,27 @@ func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
 
 	return nil
 }
+
+func DeclareAndBind(
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	durable bool,
+) (*amqp.Channel, amqp.Queue, error) {
+	ch, err := conn.Channel()
+	if err != nil {
+		return nil, amqp.Queue{}, fmt.Errorf("could not create channel: %w", err)
+	}
+
+	queue, err := ch.QueueDeclare(queueName, durable, !durable, !durable, false, nil)
+	if err != nil {
+		return nil, amqp.Queue{}, fmt.Errorf("could not create queue: %w", err)
+	}
+	err = ch.QueueBind(queueName, key, exchange, false, nil)
+	if err != nil {
+		return nil, amqp.Queue{}, fmt.Errorf("could not bind queue: %w", err)
+	}
+
+	return ch, queue, nil
+}
