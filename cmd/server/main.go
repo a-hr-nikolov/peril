@@ -31,7 +31,18 @@ func main() {
 
 	gamelogic.PrintServerHelp()
 
-outer:
+	_, _, errQueue := pubsub.DeclareAndBind(
+		conn,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug,
+		"game_logs.*",
+		true,
+	)
+	if errQueue != nil {
+		log.Fatalf("could not create logging queue: %v", err)
+	}
+
+OUTER:
 	for {
 		words := gamelogic.GetInput()
 		if len(words) == 0 {
@@ -55,8 +66,8 @@ outer:
 				routing.PlayingState{IsPaused: false},
 			)
 		case "quit":
-			fmt.Println("Sending a resume message to RabbitMQ!")
-			break outer
+			fmt.Println("Quitting")
+			break OUTER
 		default:
 			fmt.Println("No such command.")
 		}
