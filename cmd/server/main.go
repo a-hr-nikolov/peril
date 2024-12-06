@@ -55,7 +55,7 @@ OUTER:
 				channel,
 				routing.ExchangePerilDirect,
 				routing.PauseKey,
-				routing.PlayingState{IsPaused: true},
+				&routing.PlayingState{IsPaused: true},
 			)
 		case "resume":
 			fmt.Println("Sending a resume message to RabbitMQ!")

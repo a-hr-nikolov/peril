@@ -1,9 +1,9 @@
 package pubsub
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -13,9 +13,8 @@ func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
 	if err != nil {
 		return fmt.Errorf("could not marshal value %v:\n%w", val, err)
 	}
-	ctx := context.Background()
-	err = ch.PublishWithContext(
-		ctx,
+
+	err = ch.Publish(
 		exchange,
 		key,
 		false,
@@ -57,4 +56,45 @@ func DeclareAndBind(
 	}
 
 	return ch, queue, nil
+}
+
+func SubscribeJSON[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	durable bool,
+	handler func(T),
+) error {
+	ch, _, err := DeclareAndBind(
+		conn,
+		exchange,
+		queueName,
+		key,
+		durable,
+	)
+	if err != nil {
+		return fmt.Errorf("could not declare and bind queue: %w", err)
+	}
+
+	deliveryCh, err := ch.Consume(
+		queueName, "", false, false, false, false, nil,
+	)
+	if err != nil {
+		return fmt.Errorf("could not consume queue: %w", err)
+	}
+
+	go func() {
+		for v := range deliveryCh {
+			var data T
+			err := json.Unmarshal(v.Body, &data)
+			if err != nil {
+				log.Printf("could not unmarshal delivery: %v", err)
+			}
+			handler(data)
+			v.Ack(false)
+		}
+	}()
+
+	return nil
 }

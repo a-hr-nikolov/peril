@@ -26,22 +26,62 @@ func main() {
 
 	username, err := gamelogic.ClientWelcome()
 	if err != nil {
-		log.Fatalf("error: %v", err)
-	}
-
-	queueName := fmt.Sprintf("%s.%s", routing.PauseKey, username)
-	_, _, errBind := pubsub.DeclareAndBind(
-		conn,
-		routing.ExchangePerilDirect,
-		queueName,
-		routing.PauseKey,
-		false,
-	)
-	if errBind != nil {
-		log.Fatalf("Could not bind queue: %v", errBind)
+		log.Fatalf("game logic failure: %v", err)
 	}
 
 	gameState := gamelogic.NewGameState(username)
+
+	movePubCh, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("cannot create channel: %v", err)
+	}
+
+	moveName := fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, username)
+	moveKey := fmt.Sprintf("%s.*", routing.ArmyMovesPrefix)
+	_, moveQueue, errMoveBind := pubsub.DeclareAndBind(
+		conn,
+		routing.ExchangePerilTopic,
+		moveName,
+		moveKey,
+		false,
+	)
+	if errMoveBind != nil {
+		log.Fatalf("could not band move queue: %v", errMoveBind)
+	}
+	errMoveSubscribe := pubsub.SubscribeJSON(
+		conn,
+		routing.ExchangePerilTopic,
+		moveQueue.Name,
+		moveKey,
+		false,
+		handlerMove(gameState),
+	)
+	if errMoveSubscribe != nil {
+		log.Fatalf("could not subscribe to move queue: %v", errMoveSubscribe)
+	}
+
+	pauseName := fmt.Sprintf("%s.%s", routing.PauseKey, username)
+	_, _, errPauseBind := pubsub.DeclareAndBind(
+		conn,
+		routing.ExchangePerilDirect,
+		pauseName,
+		routing.PauseKey,
+		false,
+	)
+	if errPauseBind != nil {
+		log.Fatalf("could bind to pause queue: %v", errPauseBind)
+	}
+	errPauseSubscribe := pubsub.SubscribeJSON(
+		conn,
+		routing.ExchangePerilTopic,
+		pauseName,
+		fmt.Sprintf("%s.%s", routing.PauseKey, username),
+		false,
+		handlerPause(gameState),
+	)
+	if errPauseSubscribe != nil {
+		log.Fatalf("could not subscribe to pause queue: %+v", err)
+	}
 
 OUTER:
 	for {
@@ -57,12 +97,19 @@ OUTER:
 			}
 
 		case "move":
-			move, err := gameState.CommandMove(words)
+			armyMove, err := gameState.CommandMove(words)
 			if err != nil {
 				log.Printf("error: %v", err)
 				continue OUTER
 			}
-			fmt.Printf("Move successful! %+v\n", move)
+			pubsub.PublishJSON(
+				movePubCh,
+				routing.ExchangePerilTopic,
+				moveKey,
+				&armyMove,
+			)
+
+			fmt.Println("Move successful!")
 
 		case "status":
 			gameState.CommandStatus()
