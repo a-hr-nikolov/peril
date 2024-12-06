@@ -54,7 +54,16 @@ func DeclareAndBind(
 		return nil, amqp.Queue{}, fmt.Errorf("could not create channel: %w", err)
 	}
 
-	queue, err := ch.QueueDeclare(queueName, durable, !durable, !durable, false, nil)
+	queue, err := ch.QueueDeclare(
+		queueName,
+		durable,
+		!durable,
+		!durable,
+		false,
+		amqp.Table{
+			"x-dead-letter-exchange": "peril_dlx",
+		},
+	)
 	if err != nil {
 		return nil, amqp.Queue{}, fmt.Errorf("could not create queue: %w", err)
 	}
@@ -86,13 +95,20 @@ func SubscribeJSON[T any](
 	}
 
 	deliveryCh, err := ch.Consume(
-		queueName, "", false, false, false, false, nil,
+		queueName,
+		"",
+		false,
+		false,
+		false,
+		false,
+		nil,
 	)
 	if err != nil {
 		return fmt.Errorf("could not consume queue: %w", err)
 	}
 
 	go func() {
+		defer ch.Close()
 		for delivery := range deliveryCh {
 			var data T
 			err := json.Unmarshal(delivery.Body, &data)

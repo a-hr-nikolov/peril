@@ -11,121 +11,103 @@ import (
 )
 
 func main() {
-	rabbitMQConnString := "amqp://guest:guest@localhost:5672/"
-	conn, err := amqp.Dial(rabbitMQConnString)
-	if err != nil {
-		log.Fatalf("could not connect to the AMQP network %v", err)
-	}
-	defer func() {
-		if err := conn.Close(); err != nil {
-			log.Println("connection could not close")
-		}
-	}()
+	fmt.Println("Starting Peril client...")
+	const rabbitConnString = "amqp://guest:guest@localhost:5672/"
 
+	conn, err := amqp.Dial(rabbitConnString)
+	if err != nil {
+		log.Fatalf("could not connect to RabbitMQ: %v", err)
+	}
+	defer conn.Close()
 	fmt.Println("Peril game client connected to RabbitMQ!")
+
+	publishCh, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("could not create channel: %v", err)
+	}
 
 	username, err := gamelogic.ClientWelcome()
 	if err != nil {
-		log.Fatalf("game logic failure: %v", err)
+		log.Fatalf("could not get username: %v", err)
 	}
+	gs := gamelogic.NewGameState(username)
 
-	gameState := gamelogic.NewGameState(username)
-
-	movePubCh, err := conn.Channel()
+	err = pubsub.SubscribeJSON(
+		conn,
+		routing.ExchangePerilTopic,
+		routing.ArmyMovesPrefix+"."+gs.GetUsername(),
+		routing.ArmyMovesPrefix+".*",
+		false,
+		handlerMove(gs, publishCh),
+	)
 	if err != nil {
-		log.Fatalf("cannot create channel: %v", err)
+		log.Fatalf("could not subscribe to army moves: %v", err)
 	}
-
-	moveName := fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, username)
-	moveKey := fmt.Sprintf("%s.*", routing.ArmyMovesPrefix)
-	_, moveQueue, errMoveBind := pubsub.DeclareAndBind(
+	err = pubsub.SubscribeJSON(
 		conn,
 		routing.ExchangePerilTopic,
-		moveName,
-		moveKey,
-		false,
+		routing.WarRecognitionsPrefix,
+		routing.WarRecognitionsPrefix+".*",
+		true,
+		handlerWar(gs),
 	)
-	if errMoveBind != nil {
-		log.Fatalf("could not band move queue: %v", errMoveBind)
+	if err != nil {
+		log.Fatalf("could not subscribe to war declarations: %v", err)
 	}
-	errMoveSubscribe := pubsub.SubscribeJSON(
-		conn,
-		routing.ExchangePerilTopic,
-		moveQueue.Name,
-		moveKey,
-		false,
-		handlerMove(gameState),
-	)
-	if errMoveSubscribe != nil {
-		log.Fatalf("could not subscribe to move queue: %v", errMoveSubscribe)
-	}
-
-	pauseName := fmt.Sprintf("%s.%s", routing.PauseKey, username)
-	_, _, errPauseBind := pubsub.DeclareAndBind(
+	err = pubsub.SubscribeJSON(
 		conn,
 		routing.ExchangePerilDirect,
-		pauseName,
+		routing.PauseKey+"."+gs.GetUsername(),
 		routing.PauseKey,
 		false,
+		handlerPause(gs),
 	)
-	if errPauseBind != nil {
-		log.Fatalf("could bind to pause queue: %v", errPauseBind)
-	}
-	errPauseSubscribe := pubsub.SubscribeJSON(
-		conn,
-		routing.ExchangePerilTopic,
-		pauseName,
-		fmt.Sprintf("%s.%s", routing.PauseKey, username),
-		false,
-		handlerPause(gameState),
-	)
-	if errPauseSubscribe != nil {
-		log.Fatalf("could not subscribe to pause queue: %+v", err)
+	if err != nil {
+		log.Fatalf("could not subscribe to pause: %v", err)
 	}
 
-OUTER:
 	for {
 		words := gamelogic.GetInput()
 		if len(words) == 0 {
 			continue
 		}
 		switch words[0] {
-		case "spawn":
-			err := gameState.CommandSpawn(words)
-			if err != nil {
-				log.Printf("error: %v", err)
-			}
-
 		case "move":
-			armyMove, err := gameState.CommandMove(words)
+			mv, err := gs.CommandMove(words)
 			if err != nil {
-				log.Printf("error: %v", err)
-				continue OUTER
+				fmt.Println(err)
+				continue
 			}
-			pubsub.PublishJSON(
-				movePubCh,
+
+			err = pubsub.PublishJSON(
+				publishCh,
 				routing.ExchangePerilTopic,
-				moveKey,
-				&armyMove,
+				routing.ArmyMovesPrefix+"."+mv.Player.Username,
+				mv,
 			)
-
-			fmt.Println("Move successful!")
-
+			if err != nil {
+				fmt.Printf("error: %s\n", err)
+				continue
+			}
+			fmt.Printf("Moved %v units to %s\n", len(mv.Units), mv.ToLocation)
+		case "spawn":
+			err = gs.CommandSpawn(words)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
 		case "status":
-			gameState.CommandStatus()
-
+			gs.CommandStatus()
 		case "help":
 			gamelogic.PrintClientHelp()
-
 		case "spam":
-			fmt.Println("Spamming not allowed yet")
-
+			// TODO: publish n malicious logs
+			fmt.Println("Spamming not allowed yet!")
 		case "quit":
-			fmt.Println("Quitting!")
-			break OUTER
-
+			gamelogic.PrintQuit()
+			return
 		default:
-			fmt.Println("No such command.")
+			fmt.Println("unknown command")
 		}
 	}
 }
