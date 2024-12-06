@@ -36,15 +36,16 @@ func main() {
 
 	gamelogic.PrintServerHelp()
 
-	_, _, errQueue := pubsub.DeclareAndBind(
+	err = pubsub.SubscribeGob(
 		conn,
 		routing.ExchangePerilTopic,
 		routing.GameLogSlug,
-		"game_logs.*",
+		routing.GameLogSlug+".*",
 		true,
+		handlerLog(),
 	)
-	if errQueue != nil {
-		log.Fatalf("could not create logging queue: %v", err)
+	if err != nil {
+		log.Fatalf("could not subscribe to logging queue: %v", err)
 	}
 
 OUTER:

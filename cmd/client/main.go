@@ -30,6 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not get username: %v", err)
 	}
+
 	gs := gamelogic.NewGameState(username)
 
 	err = pubsub.SubscribeJSON(
@@ -49,7 +50,7 @@ func main() {
 		routing.WarRecognitionsPrefix,
 		routing.WarRecognitionsPrefix+".*",
 		true,
-		handlerWar(gs),
+		handlerWar(gs, publishCh),
 	)
 	if err != nil {
 		log.Fatalf("could not subscribe to war declarations: %v", err)

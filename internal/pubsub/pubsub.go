@@ -1,6 +1,8 @@
 package pubsub
 
 import (
+	"bytes"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,32 +17,6 @@ const (
 	NackRequeue
 	NackDiscard
 )
-
-func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
-	jsonData, err := json.Marshal(val)
-	if err != nil {
-		return fmt.Errorf("could not marshal value %v:\n%w", val, err)
-	}
-
-	err = ch.Publish(
-		exchange,
-		key,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        jsonData,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"could not publish to exchange %v with key %v:\n%w",
-			exchange, key, err,
-		)
-	}
-
-	return nil
-}
 
 func DeclareAndBind(
 	conn *amqp.Connection,
@@ -75,13 +51,14 @@ func DeclareAndBind(
 	return ch, queue, nil
 }
 
-func SubscribeJSON[T any](
+func subscribe[T any](
 	conn *amqp.Connection,
 	exchange,
 	queueName,
 	key string,
 	durable bool,
 	handler func(T) AckType,
+	unmarshaller func([]byte) (T, error),
 ) error {
 	ch, _, err := DeclareAndBind(
 		conn,
@@ -111,7 +88,7 @@ func SubscribeJSON[T any](
 		defer ch.Close()
 		for delivery := range deliveryCh {
 			var data T
-			err := json.Unmarshal(delivery.Body, &data)
+			data, err := unmarshaller(delivery.Body)
 			if err != nil {
 				log.Printf("could not unmarshal delivery: %v", err)
 			}
@@ -126,6 +103,116 @@ func SubscribeJSON[T any](
 			}
 		}
 	}()
+
+	return nil
+}
+
+func SubscribeJSON[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	durable bool,
+	handler func(T) AckType,
+) error {
+	unmarshaller := func(deliveryBody []byte) (T, error) {
+		var data T
+		err := json.Unmarshal(deliveryBody, &data)
+		if err != nil {
+			return data, fmt.Errorf("could not unmarshal delivery: %v", err)
+		}
+		return data, nil
+	}
+
+	return subscribe(
+		conn,
+		exchange,
+		queueName,
+		key,
+		durable,
+		handler,
+		unmarshaller,
+	)
+}
+
+func SubscribeGob[T any](conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	durable bool,
+	handler func(T) AckType,
+) error {
+	unmarshaller := func(deliveryBody []byte) (T, error) {
+		var data T
+		decoder := gob.NewDecoder(bytes.NewBuffer(deliveryBody))
+		err := decoder.Decode(&data)
+		if err != nil {
+			return data, fmt.Errorf("could not unmarshal delivery: %v", err)
+		}
+		return data, nil
+	}
+
+	return subscribe(
+		conn,
+		exchange,
+		queueName,
+		key,
+		durable,
+		handler,
+		unmarshaller,
+	)
+}
+
+func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
+	jsonData, err := json.Marshal(val)
+	if err != nil {
+		return fmt.Errorf("could not marshal value %v:\n%w", val, err)
+	}
+
+	err = ch.Publish(
+		exchange,
+		key,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "application/json",
+			Body:        jsonData,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"could not publish to exchange %v with key %v:\n%w",
+			exchange, key, err,
+		)
+	}
+
+	return nil
+}
+
+func PublishGob[T any](ch *amqp.Channel, exchange, key string, val T) error {
+	var buffer bytes.Buffer
+	encoder := gob.NewEncoder(&buffer)
+	err := encoder.Encode(val)
+	if err != nil {
+		return fmt.Errorf("could not encode value: %w", err)
+	}
+
+	err = ch.Publish(
+		exchange,
+		key,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "application/gob",
+			Body:        buffer.Bytes(),
+		},
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"could not publish to exchange %v with key %v:\n%w",
+			exchange, key, err,
+		)
+	}
 
 	return nil
 }

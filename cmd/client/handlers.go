@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -55,24 +57,51 @@ func handlerMove(
 
 func handlerWar(
 	gs *gamelogic.GameState,
+	publishCh *amqp.Channel,
 ) func(dw gamelogic.RecognitionOfWar) pubsub.AckType {
 	return func(dw gamelogic.RecognitionOfWar) pubsub.AckType {
 		defer fmt.Print("> ")
-		warOutcome, _, _ := gs.HandleWar(dw)
+		warOutcome, winner, loser := gs.HandleWar(dw)
+
+		var msg string
+
 		switch warOutcome {
 		case gamelogic.WarOutcomeNotInvolved:
 			return pubsub.NackRequeue
 		case gamelogic.WarOutcomeNoUnits:
 			return pubsub.NackDiscard
 		case gamelogic.WarOutcomeOpponentWon:
-			return pubsub.Ack
+			fallthrough
 		case gamelogic.WarOutcomeYouWon:
-			return pubsub.Ack
+			msg = fmt.Sprintf("%s won against %s", winner, loser)
 		case gamelogic.WarOutcomeDraw:
-			return pubsub.Ack
+			msg = fmt.Sprintf(
+				"A war between %s and %s resulted in a draw.",
+				winner,
+				loser,
+			)
+		default:
+			fmt.Println("error: unknown war outcome")
+			return pubsub.NackDiscard
 		}
 
-		fmt.Println("error: unknown war outcome")
-		return pubsub.NackDiscard
+		gl := routing.GameLog{
+			CurrentTime: time.Now().UTC(),
+			Message:     msg,
+			Username:    winner,
+		}
+
+		err := pubsub.PublishGob(
+			publishCh,
+			routing.ExchangePerilTopic,
+			fmt.Sprintf("%s.%s", routing.GameLogSlug, gs.GetUsername()),
+			gl,
+		)
+		if err != nil {
+			log.Println("could not publish gob")
+			return pubsub.NackRequeue
+		}
+
+		return pubsub.Ack
 	}
 }
