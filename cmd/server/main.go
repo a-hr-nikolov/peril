@@ -28,6 +28,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not create rabbitMQ channel: %v", err)
 	}
+	defer func() {
+		if err := channel.Close(); err != nil {
+			log.Println("could not close:", err)
+		}
+	}()
 
 	gamelogic.PrintServerHelp()
 
